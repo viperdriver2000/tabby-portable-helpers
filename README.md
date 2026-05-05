@@ -1,9 +1,10 @@
 # tabby-portable-helpers
 
-Two PowerShell helper scripts for [Tabby Terminal](https://github.com/Eugeny/tabby) Portable on Windows:
+Three PowerShell helper scripts for [Tabby Terminal](https://github.com/Eugeny/tabby) Portable on Windows:
 
 - **`Start-Tabby`** — launches Tabby with the correct Pageant SSH-agent pipe
-- **`Update-Tabby`** — keeps Tabby up to date without touching your settings
+- **`Update-PageantPath`** — only updates the Pageant pipe path in `config.yaml` (for use from external launchers like an AutoIt script that starts Pageant)
+- **`Update-Tabby`** — keeps Tabby itself up to date without touching your settings
 
 ## Why?
 
@@ -35,7 +36,7 @@ The catch: Pageant generates its pipe name via `CryptProtectMemory(CRYPTPROTECTM
 ## Installation
 
 1. Download or clone this repository.
-2. Copy the four files (`Start-Tabby.ps1`, `Start-Tabby.cmd`, `Update-Tabby.ps1`, `Update-Tabby.cmd`) into your Tabby Portable directory (next to `Tabby.exe`).
+2. Copy the script files into your Tabby Portable directory (next to `Tabby.exe`).
 3. Make sure Pageant is running with your keys loaded.
 4. Double-click `Start-Tabby.cmd` instead of `Tabby.exe`.
 
@@ -52,6 +53,17 @@ The first time `Start-Tabby` runs it will inject the necessary `ssh:` block into
 .\Start-Tabby.ps1 -OnlyUpdate # update only, do not launch
 ```
 
+Calls `Update-PageantPath.ps1` internally and then launches `Tabby.exe` (skips if already running).
+
+### Update-PageantPath
+
+```powershell
+.\Update-PageantPath.ps1                  # auto-detect Tabby dir from script location
+.\Update-PageantPath.ps1 -TabbyDir 'C:\Path\To\Tabby'
+```
+
+Updates only the `agentPath` entry in `config.yaml`. Useful if you launch Pageant from an external script (AutoIt, AHK, scheduled task, etc.) and want to refresh the Tabby config right after — without launching Tabby itself.
+
 What it does:
 
 1. Lists Windows named pipes and finds the one matching `^pageant\.`.
@@ -59,9 +71,22 @@ What it does:
 3. Updates `agentPath` (handles single-quoted, double-quoted, and folded `>-` YAML formats).
 4. If `agentType: named-pipe` is missing, inserts it.
 5. If the entire `ssh:` block is missing, creates it.
-6. Launches `Tabby.exe` (skips if already running).
 
-If Pageant is not running, the config is left untouched and Tabby is launched anyway.
+Idempotent — safe to run repeatedly. Exits with code `0` on success / no-op, `1` if `config.yaml` is missing, `2` if Pageant isn't running.
+
+#### Example: AutoIt integration
+
+```autoit
+; In your existing Pageant launcher .au3 script,
+; right after Run() returns and the keys are loaded:
+RunWait('"C:\Windows\System32\cmd.exe" /c "C:\Path\To\Tabby\Update-PageantPath.cmd"', "", @SW_HIDE)
+```
+
+Or directly via PowerShell:
+
+```autoit
+RunWait('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Path\To\Tabby\Update-PageantPath.ps1"', "", @SW_HIDE)
+```
 
 ### Update-Tabby
 
@@ -94,7 +119,7 @@ By default Windows blocks running `.ps1` scripts (Execution Policy). The `.cmd` 
 
 ## Cleaning up
 
-If you ever want to revert: delete the four script files and remove the `agentPath` line from `data/config.yaml` (or set `agentType: pageant` to use Tabby's default — broken — Pageant code path).
+If you ever want to revert: delete the script files and remove the `agentPath` line from `data/config.yaml` (or set `agentType: pageant` to use Tabby's default — broken — Pageant code path).
 
 ## License
 
