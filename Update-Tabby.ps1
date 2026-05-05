@@ -112,7 +112,11 @@ try {
 
     Write-Step "Extracting archive..."
     $extractDir = Join-Path $tempDir 'extracted'
-    Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force
+    # Use .NET ZipFile API instead of Expand-Archive: it's faster and
+    # avoids spurious cleanup-related "PathNotFound" errors that can
+    # happen with Expand-Archive on large archives.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipFile, $extractDir)
 
     $extractedRoot = $extractDir
     $extractedExe = Join-Path $extractedRoot 'Tabby.exe'
