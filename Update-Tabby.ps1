@@ -5,14 +5,19 @@
 # (config.yaml, profiles, plugins, etc.).
 #
 # Usage:
-#   .\Update-Tabby.ps1           # Update to latest version
-#   .\Update-Tabby.ps1 -Check    # Only check, do not install
-#   .\Update-Tabby.ps1 -Force    # Re-install even if already up to date
+#   .\Update-Tabby.ps1                  # Update to latest version
+#   .\Update-Tabby.ps1 -Check           # Only check, do not install
+#   .\Update-Tabby.ps1 -Force           # Re-install even if already up to date
+#   .\Update-Tabby.ps1 -ListVersions    # Show available versions on GitHub
+#   .\Update-Tabby.ps1 -Version 1.0.230 # Install a specific version (downgrade
+#                                       # or pin to a known-good release)
 
 [CmdletBinding()]
 param(
     [switch]$Check,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$ListVersions,
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,11 +39,10 @@ function Get-CurrentVersion {
     return $info.ProductVersion -replace '\.0$', ''
 }
 
-function Get-LatestVersion {
-    $api = 'https://api.github.com/repos/Eugeny/tabby/releases/latest'
-    $release = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'Tabby-Updater' }
-    $version = $release.tag_name -replace '^v', ''
-    $asset = $release.assets | Where-Object { $_.name -eq "tabby-$version-portable-x64.zip" }
+function Get-AssetForVersion {
+    param([Parameter(Mandatory)][PSCustomObject]$Release)
+    $version = $Release.tag_name -replace '^v', ''
+    $asset = $Release.assets | Where-Object { $_.name -eq "tabby-$version-portable-x64.zip" }
     if (-not $asset) {
         throw "Asset 'tabby-$version-portable-x64.zip' not found in release."
     }
@@ -47,6 +51,42 @@ function Get-LatestVersion {
         Url     = $asset.browser_download_url
         Size    = $asset.size
     }
+}
+
+function Get-LatestVersion {
+    $api = 'https://api.github.com/repos/Eugeny/tabby/releases/latest'
+    $release = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'Tabby-Updater' }
+    return Get-AssetForVersion -Release $release
+}
+
+function Get-VersionList {
+    param([int]$PerPage = 30)
+    $api = "https://api.github.com/repos/Eugeny/tabby/releases?per_page=$PerPage"
+    $releases = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'Tabby-Updater' }
+    return $releases | ForEach-Object {
+        $ver = $_.tag_name -replace '^v', ''
+        $hasAsset = ($_.assets | Where-Object { $_.name -eq "tabby-$ver-portable-x64.zip" }) -ne $null
+        [PSCustomObject]@{
+            Version    = $ver
+            Published  = ([DateTime]$_.published_at).ToString('yyyy-MM-dd')
+            Prerelease = $_.prerelease
+            HasPortable = $hasAsset
+        }
+    }
+}
+
+function Get-SpecificVersion {
+    param([string]$Tag)
+    # GitHub accepts both "v1.0.230" and "1.0.230" — normalise to "v..."
+    if (-not $Tag.StartsWith('v')) { $Tag = "v$Tag" }
+    $api = "https://api.github.com/repos/Eugeny/tabby/releases/tags/$Tag"
+    try {
+        $release = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'Tabby-Updater' }
+    }
+    catch {
+        throw "Release '$Tag' not found on GitHub. Run with -ListVersions to see available versions."
+    }
+    return Get-AssetForVersion -Release $release
 }
 
 function Stop-Tabby {
@@ -62,6 +102,27 @@ function Stop-Tabby {
     }
 }
 
+# --- ListVersions: show available releases and exit ---
+if ($ListVersions) {
+    Write-Step "Available Tabby versions on GitHub" 'Magenta'
+    Write-Host ""
+    $current = Get-CurrentVersion
+    $versions = Get-VersionList
+    Write-Host ("  {0,-12} {1,-12} {2,-10} {3}" -f 'Version', 'Published', 'Prerelease', 'Notes')
+    Write-Host ("  {0,-12} {1,-12} {2,-10} {3}" -f '-------', '---------', '----------', '-----')
+    foreach ($v in $versions) {
+        $marker = ''
+        if ($v.Version -eq $current) { $marker = '<-- current' }
+        $color = if ($v.Prerelease) { 'DarkGray' } elseif (-not $v.HasPortable) { 'DarkGray' } else { 'Gray' }
+        $note = if (-not $v.HasPortable) { '(no x64 portable asset)' } else { $marker }
+        Write-Host ("  {0,-12} {1,-12} {2,-10} {3}" -f $v.Version, $v.Published, $v.Prerelease, $note) -ForegroundColor $color
+    }
+    Write-Host ""
+    Write-Host "Install a specific version with:" -ForegroundColor Cyan
+    Write-Host "  .\Update-Tabby.ps1 -Version <version>" -ForegroundColor Cyan
+    return
+}
+
 Write-Step "Tabby Update Check" 'Magenta'
 Write-Host ""
 
@@ -73,14 +134,23 @@ else {
     Write-Host "  Current version: (no installation found)"
 }
 
-Write-Step "Fetching latest version from GitHub..."
-$latest = Get-LatestVersion
-Write-Host "  Latest version:  $($latest.Version)"
+# --- Resolve target version: explicit -Version takes precedence over latest ---
+if ($Version) {
+    Write-Step "Fetching version $Version from GitHub..."
+    $latest = Get-SpecificVersion -Tag $Version
+    Write-Host "  Target version:  $($latest.Version)"
+}
+else {
+    Write-Step "Fetching latest version from GitHub..."
+    $latest = Get-LatestVersion
+    Write-Host "  Latest version:  $($latest.Version)"
+}
 Write-Host "  Download size:   $([math]::Round($latest.Size / 1MB, 1)) MB"
 Write-Host ""
 
 if ($current -eq $latest.Version -and -not $Force) {
-    Write-Host "Tabby is already up to date." -ForegroundColor Green
+    Write-Host "Tabby is already at version $($latest.Version)." -ForegroundColor Green
+    Write-Host "Use -Force to re-install." -ForegroundColor DarkGray
     return
 }
 
@@ -91,8 +161,15 @@ if ($Check) {
     return
 }
 
+# Detect downgrade and call it out clearly
+$action = 'update'
+if ($current -and $latest.Version -and ([System.Version]$current -gt [System.Version]$latest.Version)) {
+    $action = 'DOWNGRADE'
+    Write-Host "WARNING: This will DOWNGRADE Tabby from $current to $($latest.Version)." -ForegroundColor Yellow
+}
+
 if (-not $Force) {
-    Write-Host "Proceed with update? [Y/n]: " -ForegroundColor Yellow -NoNewline
+    Write-Host ("Proceed with {0}? [Y/n]: " -f $action) -ForegroundColor Yellow -NoNewline
     $answer = Read-Host
     if ($answer -and $answer -notmatch '^[jJyY]') {
         Write-Host "Aborted." -ForegroundColor Red
@@ -164,7 +241,7 @@ try {
     $newVersion = Get-CurrentVersion
     if ($newVersion -eq $latest.Version) {
         Write-Host ""
-        Write-Host "Update successful: $current -> $newVersion" -ForegroundColor Green
+        Write-Host "$($action -replace 'DOWNGRADE','Downgrade' -replace 'update','Update') successful: $current -> $newVersion" -ForegroundColor Green
     }
     else {
         Write-Host "Warning: version verification failed. Expected: $($latest.Version), got: $newVersion" -ForegroundColor Yellow

@@ -91,20 +91,25 @@ RunWait('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Path\To\Tab
 ### Update-Tabby
 
 ```powershell
-.\Update-Tabby.ps1           # update to latest version
-.\Update-Tabby.ps1 -Check    # only check, do not install
-.\Update-Tabby.ps1 -Force    # re-install even if already up to date
+.\Update-Tabby.ps1                  # update to latest version
+.\Update-Tabby.ps1 -Check           # only check, do not install
+.\Update-Tabby.ps1 -Force           # re-install even if already up to date
+.\Update-Tabby.ps1 -ListVersions    # show available versions on GitHub
+.\Update-Tabby.ps1 -Version 1.0.230 # install a specific version (downgrade
+                                    # or pin to a known-good release)
 ```
 
 What it does:
 
 1. Reads the local Tabby version from `Tabby.exe`'s file metadata.
-2. Queries the GitHub Releases API for the latest version.
+2. Queries the GitHub Releases API for the latest version (or the specified one).
 3. Downloads `tabby-<version>-portable-x64.zip` to `%TEMP%`.
-4. Extracts the archive.
+4. Extracts the archive (uses Windows built-in `tar.exe` for long-path support).
 5. Stops any running Tabby processes.
-6. Replaces the program files but **leaves `data/` untouched** (your config, profiles, plugins are preserved).
-7. Verifies the new version.
+6. Installs program files via `robocopy` (long-path safe), but **leaves `data/` untouched** (your config, profiles, plugins are preserved).
+7. Verifies the resulting version.
+
+Downgrades are explicitly called out in the prompt and require confirmation. With `-ListVersions` you get a table of all releases, marking the currently installed one — handy when a new release breaks something and you want to roll back.
 
 ## Requirements
 
