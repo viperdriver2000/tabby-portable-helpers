@@ -112,11 +112,27 @@ try {
 
     Write-Step "Extracting archive..."
     $extractDir = Join-Path $tempDir 'extracted'
-    # Use .NET ZipFile API instead of Expand-Archive: it's faster and
-    # avoids spurious cleanup-related "PathNotFound" errors that can
-    # happen with Expand-Archive on large archives.
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipFile, $extractDir)
+    New-Item -ItemType Directory -Path $extractDir | Out-Null
+
+    # The Tabby ZIP contains paths > 260 chars (internal node-gyp
+    # build artefacts). PowerShell's Expand-Archive and .NET's
+    # ZipFile.ExtractToDirectory both choke on these on systems
+    # without long-path support enabled.
+    #
+    # Windows 10+ ships a real tar.exe (BSD libarchive) that handles
+    # long paths transparently. Use it if available, fall back to
+    # .NET otherwise.
+    $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($tarExe) {
+        & tar.exe -x -f $zipFile -C $extractDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "tar.exe failed to extract archive (exit code $LASTEXITCODE)."
+        }
+    }
+    else {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipFile, $extractDir)
+    }
 
     $extractedRoot = $extractDir
     $extractedExe = Join-Path $extractedRoot 'Tabby.exe'
@@ -133,28 +149,16 @@ try {
 
     Stop-Tabby
 
-    Write-Step "Backing up data/ directory..."
-    $dataBackup = Join-Path $tempDir 'data-backup'
-    if (Test-Path $DataDir) {
-        Copy-Item -Path $DataDir -Destination $dataBackup -Recurse
-    }
-
     Write-Step "Installing new version..."
-    $items = Get-ChildItem $extractedRoot
-    foreach ($item in $items) {
-        if ($item.Name -eq 'data') {
-            continue
-        }
-        $dest = Join-Path $TabbyDir $item.Name
-        if (Test-Path $dest) {
-            Remove-Item -Path $dest -Recurse -Force
-        }
-        Copy-Item -Path $item.FullName -Destination $dest -Recurse -Force
-    }
-
-    if ((Test-Path $dataBackup) -and -not (Test-Path $DataDir)) {
-        Write-Step "Restoring data/ directory..."
-        Copy-Item -Path $dataBackup -Destination $DataDir -Recurse
+    # Use robocopy: it handles long paths (>260 chars) transparently
+    # and is much faster than Copy-Item -Recurse for large trees.
+    # /XD "data" excludes the data directory if the archive contains
+    # one (it shouldn't, but defense in depth). Existing data/ in the
+    # target is left untouched.
+    # Robocopy exit codes: 0-7 = success (1=files copied, 0=nothing to do)
+    & robocopy.exe $extractedRoot $TabbyDir /E /XD (Join-Path $extractedRoot 'data') /NFL /NDL /NJH /NJS /NC /NS /NP /R:2 /W:1 > $null
+    if ($LASTEXITCODE -ge 8) {
+        throw "robocopy failed with exit code $LASTEXITCODE"
     }
 
     $newVersion = Get-CurrentVersion
